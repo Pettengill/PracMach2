@@ -1,0 +1,129 @@
+---
+title: "Data Logging Fitness Devices"
+output: html_document
+---
+
+### Background
+Using data from the [Human Activity Recognition] (http://groupware.les.inf.puc-rio.br/har)  project, I trained a model to predict the **classe** variable. The data comes from accelerometers on the belt, forearm, arm and dumbell of 6 people who were asked to lift barbells correctly and incorrectly. 
+
+### Data Processing
+
+Download data and load libraries
+```{r, cache=TRUE, tidy=TRUE, message=FALSE}
+
+library(caret)
+library(randomForest)
+if (!file.exists("Training.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+        destfile = "Training.csv")
+}
+if (!file.exists("Testing.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+        destfile = "Testing.csv")
+}
+train <- read.csv("Training.csv", na.strings=c("", "NA"), header = TRUE)
+test <- read.csv("Testing.csv", na.strings=c("", "NA"), header = TRUE,)
+
+```
+
+The raw dataset has 160 variables (code not shown for brevity).
+
+I cleaned the data so that unnecessary columns are not included, such as columns without useful information and lots of missing variables. The resulting train dataset will have 54 variables.
+
+```{r, tidy=TRUE}
+NAs <-apply(train, 2, function(x) {sum(is.na(x))})
+NAst <-apply(test, 2, function(x) {sum(is.na(x))})
+byebye <- c("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window")
+
+train <- train[,which(NAs == 0)]
+clTrain <- train[,!(names(train) %in% byebye)]
+
+test <- test[,which(NAst == 0)]
+clTest <- test[,!(names(test) %in% byebye)]
+dim(clTrain)
+```
+
+### Partition the training dataset
+
+There is a sizable amount of data meaning that subsetting the training dataset to include a validation dataset will not adversely impact the fitting. I set a seed because resulting model fitting will be slightly different if the seed is not set. 
+
+
+```{r, message=FALSE}
+library(caret)
+set.seed(17)
+PartTrain <- createDataPartition(y = clTrain$classe, p = 0.7, list = FALSE)
+seventyTrain <- clTrain[PartTrain,]
+thirtyTrain <- clTrain[-PartTrain,]
+
+```
+
+### Pre-processing with PCA
+
+I used Principal Component Analysis to identify predictors that are not linearly correlated. PCA pre-processing is a good choice for datasets with many variables.
+
+```{r}
+Pre <- preProcess(seventyTrain[, -54], method = "pca", thresh = 0.99)
+seventyTrainPre <- predict(Pre, seventyTrain[, -54])
+thirtyTrainPre <- predict(Pre, thirtyTrain[, -54])
+```
+
+### Random Forests Model
+
+I used a Random Forests algorith to fit the training dataset (seventyTrainPre). I also used a 4-fold cross validation to decrease the time needed to execute the analyses.
+
+Why Random Forests?
+A few reasons to choose Random Forests algorithm: It is accurate, efficient for large datasets, estimates important variables and limits high variance and bias. Additionally, there are not many parameters to adjust, making it great for students and the general public. 
+
+
+```{r, tidy=TRUE, message=FALSE}
+modelFitting <- train(seventyTrain$classe ~ ., method = "rf", data = seventyTrainPre, importance = TRUE, trControl = trainControl(method = "cv", number = 4), allowParallel = TRUE)
+modelFitting
+print(modelFitting$finalModel)
+```
+
+
+### Run on the validation portion of training dataset
+
+The trained model is applied to the validation dataset using the "predict" function. The "confusionMatrix" functiion provides overall statistics in addition to the matrix.
+
+```{r, message=FALSE}
+predictionThirty <- predict(modelFitting, thirtyTrainPre)
+contable <- confusionMatrix(thirtyTrain$classe, predictionThirty)
+contable$table
+```
+
+### Calculate the out-of-sample error for the validation portion of the training dataset
+
+I used the postResample function to compute the out-of-sample error rate which is 1-model accuracy.
+
+```{r}
+b <- postResample(thirtyTrain$classe, predictionThirty)
+ModelAccuracy <- b[[1]]
+ModelAccuracy
+OOSE <- 1 - ModelAccuracy
+OOSE
+## Can also be calcutated this way
+1-(sum(diag(contable$table))/sum(contable$table))
+```
+
+We see the accuracy is 98.27%. The out-of-sample error (OOSE) rate is 1-model accuracy and is 1.73% in this case. I also provided another calculation of the OOSE. 
+
+### Run model on Test dataset
+```{r}
+testPre <-predict(Pre, clTest[,-54])
+predictionTest <- predict(modelFitting, newdata=testPre)
+predictionTest
+```
+
+```{r} 
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predictionTest)
+```
+
+
